@@ -1,4 +1,5 @@
 import telebot
+from telebot.types import ReplyKeyboardMarkup, KeyboardButton
 import requests
 import os
 import threading
@@ -23,7 +24,6 @@ def run_server():
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
 
-# Server ko background mein chalayein
 threading.Thread(target=run_server, daemon=True).start()
 
 # ==========================================
@@ -39,126 +39,116 @@ CHECK_HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/114.0.0.0 Safari/537.36'
 }
 
-# Har user ka number aur unka personal 'session' save karne ke liye
-user_data = {} 
+# Har user ka data aur unka current "step" (jaise waiting for OTP) save karne ke liye
+user_state = {}
 
 # ==========================================
-# 🚀 BOT COMMANDS
+# 🎛️ BOTTOM MENU BUTTONS
+# ==========================================
+def main_menu():
+    markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    btn1 = KeyboardButton("🚀 Generate Link")
+    btn2 = KeyboardButton("⚡ Check Link")
+    markup.add(btn1, btn2)
+    return markup
+
+# ==========================================
+# 🚀 BOT COMMANDS & SMART DETECTION
 # ==========================================
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
     text = (
         "🌟 **Jio Gemini Pro Bot** mein aapka swagat hai!\n\n"
-        "👇 Neeche diye gaye commands par click karein:\n\n"
-        "🚀 /gen - Naya link banane ke liye\n"
-        "⚡ /check - Link check karne ke liye"
+        "Ab commands ki zaroorat nahi!\n"
+        "👇 Niche diye gaye Buttons ka use karein, ya direct apna **Number** ya **Link** bhejein."
     )
-    bot.reply_to(message, text, parse_mode="Markdown")
+    bot.reply_to(message, text, parse_mode="Markdown", reply_markup=main_menu())
 
-# ----------------- 🔍 CHECKER -----------------
-@bot.message_handler(commands=['check'])
-def ask_check_url(message):
-    msg = bot.reply_to(message, "🔗 Koi Google One ka link bhejein:")
-    bot.register_next_step_handler(msg, process_check_url)
-
-def process_check_url(message):
-    url = message.text.strip()
-    if not url.startswith("http"):
-        bot.reply_to(message, "❌ Yeh link nahi hai! Phir se /check dabayein.")
-        return
-
-    bot.reply_to(message, "⏳ Checking chalu hai, thoda wait karein...")
-    
-    try:
-        response = requests.get(url, headers=CHECK_HEADERS, timeout=15)
-        if response.status_code == 200:
-            used_keywords = ["already been used", "already redeemed", "has been used", "offer limit reached"]
-            if any(kw in response.text.lower() for kw in used_keywords):
-                bot.reply_to(message, "⚠️ **USED:** Link open ho raha hai, par code pehle hi USED ho chuka hai!", parse_mode="Markdown")
-            else:
-                bot.reply_to(message, "✅ **FRESH (WORKING):** Link ekdum sahi hai! (Status: 200 OK)", parse_mode="Markdown")
-        elif response.status_code == 404:
-            bot.reply_to(message, "❌ **NOT FOUND:** Ye link exist nahi karta. (Bina Gmail login ke Google 404 dikha sakta hai).")
-        else:
-            bot.reply_to(message, f"⚠️ **ERROR:** Link mein issue hai. (Status: {response.status_code})")
-    except Exception:
-        bot.reply_to(message, "❌ Network mein koi issue hai.")
-
-# ----------------- 🚀 GENERATOR -----------------
-@bot.message_handler(commands=['gen'])
-def ask_number(message):
-    msg = bot.reply_to(message, "📱 Apna 10-digit Jio number dein:")
-    bot.register_next_step_handler(msg, process_number)
-
-def process_number(message):
-    number = message.text.strip()
-    if not (number.isdigit() and len(number) == 10):
-        bot.reply_to(message, "❌ Number galat hai! Phir se /gen dabayein.")
-        return
-
-    bot.reply_to(message, f"⏳ {number} par OTP bheja ja raha hai...")
-    
-    # Naya session banayenge taaki OTP bhejte aur verify karte time same session rahe
-    user_session = requests.Session()
-    
-    try:
-        res = user_session.post(BASE_URL, data={"action": "send_otp", "number": number}, headers=API_HEADERS, timeout=20)
-        data = res.json()
-        
-        if data.get("success"):
-            # Number aur Session dono ko dictionary mein save kar liya
-            user_data[message.chat.id] = {"number": number, "session": user_session}
-            
-            msg = bot.reply_to(message, "✅ OTP bhej diya gaya! Kripya 6-digit OTP bhejein:")
-            bot.register_next_step_handler(msg, process_otp)
-        else:
-            bot.reply_to(message, f"❌ OTP nahi gaya: {data.get('message')}")
-    except Exception:
-        bot.reply_to(message, "⚠️ Server down hai, baad mein try karein.")
-
-def process_otp(message):
-    otp = message.text.strip()
+# Sab kuch ek hi jagah handle hoga (Smart Detection)
+@bot.message_handler(content_types=['text'])
+def handle_all_messages(message):
+    text = message.text.strip()
     chat_id = message.chat.id
-    
-    if not (otp.isdigit() and len(otp) == 6):
-        bot.reply_to(message, "❌ OTP 6 digit ka hona chahiye! Phir se /gen se shuru karein.")
-        return
 
-    # User ka number aur wahi purana session waapas nikalenge
-    user_info = user_data.get(chat_id, {})
-    number = user_info.get("number")
-    user_session = user_info.get("session")
-    
-    if not number or not user_session:
-        bot.reply_to(message, "❌ Session expire ho gaya ya number nahi mila, phir se /gen dabayein.")
-        return
-
-    bot.reply_to(message, "⏳ OTP check ho raha hai, link generate ho raha hai...")
-
-    try:
-        # Same user_session ka istemaal karke OTP verify karenge
-        res = user_session.post(BASE_URL, data={"action": "verify_otp", "number": number, "otp": otp}, headers=API_HEADERS, timeout=60)
-        data = res.json()
+    # 1. Button: Generate Link
+    if text == "🚀 Generate Link":
+        bot.reply_to(message, "📱 Apna 10-digit Jio number bhejein:", reply_markup=main_menu())
         
-        if data.get("success"):
-            link = data.get("link", "Link not found")
+    # 2. Button: Check Link
+    elif text == "⚡ Check Link":
+        bot.reply_to(message, "🔗 Apna Google One link paste karein:", reply_markup=main_menu())
+        
+    # 3. Smart Detect: 10-Digit Number (Direct OTP Bhejna)
+    elif text.isdigit() and len(text) == 10:
+        bot.reply_to(message, f"⏳ {text} par OTP bheja ja raha hai...")
+        
+        user_session = requests.Session()
+        try:
+            res = user_session.post(BASE_URL, data={"action": "send_otp", "number": text}, headers=API_HEADERS, timeout=20)
+            data = res.json()
             
-            # 🛠️ FIX: Message aur Link ko alag-alag bheja hai taaki Markdown ki wajah se '_' gayab na ho
-            bot.reply_to(message, "🎉 **BOOM! Link ban gaya!** 🎉\n👇 Yahan se copy karein:", parse_mode="Markdown")
+            if data.get("success"):
+                # State save kar li ki ab is user se OTP chahiye
+                user_state[chat_id] = {"step": "waiting_for_otp", "number": text, "session": user_session}
+                bot.reply_to(message, "✅ OTP bhej diya gaya! Kripya 6-digit OTP bhejein:")
+            else:
+                bot.reply_to(message, f"❌ OTP nahi gaya: {data.get('message')}")
+        except Exception:
+            bot.reply_to(message, "⚠️ Server down hai, baad mein try karein.")
+
+    # 4. Smart Detect: 6-Digit OTP (Verify aur Link Generate)
+    elif text.isdigit() and len(text) == 6:
+        # Check karenge ki kya user ka OTP wait ho raha tha
+        state = user_state.get(chat_id, {})
+        if state.get("step") == "waiting_for_otp":
+            number = state.get("number")
+            user_session = state.get("session")
             
-            # Link ko ekdum raw format mein bhejna hai
-            bot.send_message(chat_id, link) 
-            
-            # Kaam hone ke baad memory se data hata do taaki safai rahe
-            user_data.pop(chat_id, None)
+            bot.reply_to(message, "⏳ OTP verify ho raha hai...")
+            try:
+                res = user_session.post(BASE_URL, data={"action": "verify_otp", "number": number, "otp": text}, headers=API_HEADERS, timeout=60)
+                data = res.json()
+                
+                if data.get("success"):
+                    link = data.get("link", "Link not found")
+                    
+                    bot.reply_to(message, "🎉 **BOOM! Link ban gaya!** 🎉\n👇 Yahan se copy karein:", parse_mode="Markdown")
+                    bot.send_message(chat_id, link, reply_markup=main_menu()) 
+                    
+                    # Kaam khatam, state clear kar do
+                    user_state.pop(chat_id, None)
+                else:
+                    bot.reply_to(message, f"❌ Fail ho gaya: {data.get('message')}")
+            except Exception:
+                bot.reply_to(message, "⚠️ Server bahut time le raha hai.")
         else:
-            bot.reply_to(message, f"❌ Fail ho gaya: {data.get('message')}")
-    except Exception:
-        bot.reply_to(message, "⚠️ Server bahut time le raha hai.")
+            bot.reply_to(message, "❌ Pehle ek 10-digit number daalkar OTP mangwayein!")
+
+    # 5. Smart Detect: Link Checker
+    elif text.startswith("http"):
+        bot.reply_to(message, "⏳ Link check ho raha hai...")
+        try:
+            response = requests.get(text, headers=CHECK_HEADERS, timeout=15)
+            if response.status_code == 200:
+                used_keywords = ["already been used", "already redeemed", "has been used", "offer limit reached"]
+                if any(kw in response.text.lower() for kw in used_keywords):
+                    bot.reply_to(message, "⚠️ **USED:** Link open ho raha hai, par code pehle hi USED ho chuka hai!", parse_mode="Markdown")
+                else:
+                    bot.reply_to(message, "✅ **FRESH (WORKING):** Link ekdum sahi hai! (Status: 200 OK)", parse_mode="Markdown")
+            elif response.status_code == 404:
+                bot.reply_to(message, "❌ **NOT FOUND:** Ye link exist nahi karta.")
+            else:
+                bot.reply_to(message, f"⚠️ **ERROR:** Link mein issue hai. (Status: {response.status_code})")
+        except Exception:
+            bot.reply_to(message, "❌ Network ya link mein koi issue hai.")
+            
+    # 6. Agar kuch aur ulta seedha likha ho
+    else:
+        bot.reply_to(message, "🤔 Kuch samajh nahi aaya. Niche diye gaye buttons use karein, ya direct Number/Link bhejein.", reply_markup=main_menu())
 
 # ==========================================
 # 🏃‍♂️ START BOT
 # ==========================================
 if __name__ == "__main__":
-    print("🚀 Bot is running...")
+    print("🚀 Smart Bot is running...")
     bot.infinity_polling(timeout=10, long_polling_timeout=5)
