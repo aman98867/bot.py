@@ -39,7 +39,8 @@ CHECK_HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/114.0.0.0 Safari/537.36'
 }
 
-user_data = {} # User ka data (Number) save rakhne ke liye
+# Ab hum har user ka 'number' aur ek personal 'session' save karenge
+user_data = {} 
 
 # ==========================================
 # 🚀 BOT COMMANDS
@@ -97,11 +98,16 @@ def process_number(message):
 
     bot.reply_to(message, f"⏳ {number} par OTP bheja ja raha hai...")
     
+    # Naya session banayenge taaki OTP bhejte aur verify karte time same session rahe
+    user_session = requests.Session()
+    
     try:
-        res = requests.post(BASE_URL, data={"action": "send_otp", "number": number}, headers=API_HEADERS, timeout=20)
+        res = user_session.post(BASE_URL, data={"action": "send_otp", "number": number}, headers=API_HEADERS, timeout=20)
         data = res.json()
         if data.get("success"):
-            user_data[message.chat.id] = {"number": number}
+            # Number aur Session dono ko save kar liya
+            user_data[message.chat.id] = {"number": number, "session": user_session}
+            
             msg = bot.reply_to(message, "✅ OTP bhej diya gaya! Kripya 6-digit OTP bhejein:")
             bot.register_next_step_handler(msg, process_otp)
         else:
@@ -117,19 +123,27 @@ def process_otp(message):
         bot.reply_to(message, "❌ OTP 6 digit ka hona chahiye! Phir se /gen se shuru karein.")
         return
 
-    number = user_data.get(chat_id, {}).get("number")
-    if not number:
-        bot.reply_to(message, "❌ Koi dikkat aayi, phir se /gen dabayein.")
+    # User ka number aur wahi purana session waapas nikalenge
+    user_info = user_data.get(chat_id, {})
+    number = user_info.get("number")
+    user_session = user_info.get("session")
+    
+    if not number or not user_session:
+        bot.reply_to(message, "❌ Session expire ho gaya ya number nahi mila, phir se /gen dabayein.")
         return
 
     bot.reply_to(message, "⏳ OTP check ho raha hai, link generate ho raha hai...")
 
     try:
-        res = requests.post(BASE_URL, data={"action": "verify_otp", "number": number, "otp": otp}, headers=API_HEADERS, timeout=60)
+        # Same user_session ka istemaal karke OTP verify karenge
+        res = user_session.post(BASE_URL, data={"action": "verify_otp", "number": number, "otp": otp}, headers=API_HEADERS, timeout=60)
         data = res.json()
         if data.get("success"):
             link = data.get("link", "Link not found")
             bot.reply_to(message, f"🎉 **BOOM! Link ban gaya!** 🎉\n\n🔗 {link}", parse_mode="Markdown")
+            
+            # Kaam hone ke baad memory se data hata do taaki safai rahe
+            user_data.pop(chat_id, None)
         else:
             bot.reply_to(message, f"❌ Fail ho gaya: {data.get('message')}")
     except Exception:
