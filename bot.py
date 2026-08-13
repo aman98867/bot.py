@@ -27,7 +27,7 @@ def run_server():
 threading.Thread(target=run_server, daemon=True).start()
 
 # ==========================================
-# ⚙️ API HEADERS
+# ⚙️ API HEADERS & CONFIG
 # ==========================================
 BASE_URL = "https://looters.shop/jio_gemini/"
 API_HEADERS = {
@@ -39,7 +39,7 @@ CHECK_HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/114.0.0.0 Safari/537.36'
 }
 
-# Ab hum har user ka 'number' aur ek personal 'session' save karenge
+# Har user ka number aur unka personal 'session' save karne ke liye
 user_data = {} 
 
 # ==========================================
@@ -78,7 +78,7 @@ def process_check_url(message):
             else:
                 bot.reply_to(message, "✅ **FRESH (WORKING):** Link ekdum sahi hai! (Status: 200 OK)", parse_mode="Markdown")
         elif response.status_code == 404:
-            bot.reply_to(message, "❌ **NOT FOUND:** Ye link exist nahi karta.")
+            bot.reply_to(message, "❌ **NOT FOUND:** Ye link exist nahi karta. (Bina Gmail login ke Google 404 dikha sakta hai).")
         else:
             bot.reply_to(message, f"⚠️ **ERROR:** Link mein issue hai. (Status: {response.status_code})")
     except Exception:
@@ -104,8 +104,9 @@ def process_number(message):
     try:
         res = user_session.post(BASE_URL, data={"action": "send_otp", "number": number}, headers=API_HEADERS, timeout=20)
         data = res.json()
+        
         if data.get("success"):
-            # Number aur Session dono ko save kar liya
+            # Number aur Session dono ko dictionary mein save kar liya
             user_data[message.chat.id] = {"number": number, "session": user_session}
             
             msg = bot.reply_to(message, "✅ OTP bhej diya gaya! Kripya 6-digit OTP bhejein:")
@@ -138,9 +139,15 @@ def process_otp(message):
         # Same user_session ka istemaal karke OTP verify karenge
         res = user_session.post(BASE_URL, data={"action": "verify_otp", "number": number, "otp": otp}, headers=API_HEADERS, timeout=60)
         data = res.json()
+        
         if data.get("success"):
             link = data.get("link", "Link not found")
-            bot.reply_to(message, f"🎉 **BOOM! Link ban gaya!** 🎉\n\n🔗 {link}", parse_mode="Markdown")
+            
+            # 🛠️ FIX: Message aur Link ko alag-alag bheja hai taaki Markdown ki wajah se '_' gayab na ho
+            bot.reply_to(message, "🎉 **BOOM! Link ban gaya!** 🎉\n👇 Yahan se copy karein:", parse_mode="Markdown")
+            
+            # Link ko ekdum raw format mein bhejna hai
+            bot.send_message(chat_id, link) 
             
             # Kaam hone ke baad memory se data hata do taaki safai rahe
             user_data.pop(chat_id, None)
@@ -152,5 +159,6 @@ def process_otp(message):
 # ==========================================
 # 🏃‍♂️ START BOT
 # ==========================================
-print("🚀 Bot is running...")
-bot.infinity_polling(timeout=10, long_polling_timeout=5)
+if __name__ == "__main__":
+    print("🚀 Bot is running...")
+    bot.infinity_polling(timeout=10, long_polling_timeout=5)
